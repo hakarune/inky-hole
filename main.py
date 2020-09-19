@@ -1,72 +1,111 @@
+#!/usr/bin/env python
+import epd2in13bc
+import logging
+import subprocess
 import os
 import json
-import urllib2
 import socket
 import psutil
-import time
 
 # Import Requests Library
 import requests
  
-# Import Blinka
-from board import SCL, SDA
-import busio
-import adafruit_ssd1306
-
 # Import Python Imaging Library
-from inky import InkyPHAT
 from PIL import Image, ImageFont, ImageDraw
 from font_fredoka_one import FredokaOne
+from font_hanken_grotesk import HankenGroteskBold
 
 # Set current directory
-
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
-# Load graphic
+#Prepare display
+epd = epd2in13bc.EPD()
+logging.info("Init and clear")
+epd.init()
+#epd.Clear()
 
-img = Image.open("./logo.png")
-draw = ImageDraw.Draw(img)
+scale_size = 1
+padding = 0
+
+HBlackimage = Image.new('1', (epd.height, epd.width), 255)  # 298*126
+HRYimage = Image.new('1', (epd.height, epd.width), 255)  # 298*126  ryimage: red or yellow image  
+draw = ImageDraw.Draw(HBlackimage)
+drawry = ImageDraw.Draw(HRYimage)
+
+# Load graphics
+imgB = Image.open("logoB.gif")
+imgR = Image.open("logoR.gif")
+
+scaled_width = 60
+scaled_height = imgR.height * 60 // imgR.width
+imgR = imgR.resize((scaled_width, scaled_height))
+imgB = imgB.resize((scaled_width, scaled_height))
+
+#paste in logo
+HRYimage.paste(imgR, (0,12))    
+HBlackimage.paste(imgB, (0,12))
 
 # system monitoring from here :
-  IP = socket.gethostbyname(socket.gethostname())
-  cpu = psutil.cpu_percent()
-  memory = psutil.virtual_memory().available * 100 / psutil.virtual_memory().total
+print("Getting System Info")
+#IP = socket.gethostbyname(socket.gethostname())
+s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+s.connect(("8.8.8.8", 80))
+#print(s.getsockname()[0])
+IP = s.getsockname()[0]
+s.close()
+cpu = psutil.cpu_percent()
+memory = psutil.virtual_memory().available * 100 / psutil.virtual_memory().total
+ram = round(memory)
 
-# get api data
+# Shell scripts for system monitoring from here :
+# https://unix.stackexchange.com/questions/119126/command-to-display-memory-usage-disk-usage-and-cpu-load
+#cmd = "hostname -I | cut -d\' \' -f1 | tr -d \'\\n\'"
+#IP = subprocess.check_output(cmd, shell=True).decode("utf-8")
+cmd = "hostname | tr -d \'\\n\'"
+HOST = subprocess.check_output(cmd, shell=True).decode("utf-8")
+#cmd = "top -bn1 | grep load | awk " \
+#      "'{printf \"CPU Load: %.2f\", $(NF-2)}'"
+#CPU = subprocess.check_output(cmd, shell=True).decode("utf-8")
+#cmd = "free -m | awk 'NR==2{printf " \
+#      "\"Mem: %s/%sMB %.2f%%\", $3,$2,$3*100/$2 }'"
+#MemUsage = subprocess.check_output(cmd, shell=True).decode("utf-8")
+#cmd = "df -h | awk '$NF==\"/\"{printf " \
+#      "\"Disk: %d/%dGB %s\", $3,$2,$5}'"
+#Disk = subprocess.check_output(cmd, shell=True).decode("utf-8")
+
+# get api data // Pi Hole data!
+api_url = 'http://localhost/admin/api.php'
+print("getting pi-hole data")
 
 try:
-  f = urllib2.urlopen('http://pi.hole/admin/api.php')
-  json_string = f.read()
-  parsed_json = json.loads(json_string)
-  adsblocked = parsed_json['ads_blocked_today']
-  r = requests.get(api_url)
-  data = json.loads(r.text)
-  DNSQUERIES = data['dns_queries_today']
-  ADSBLOCKED = data['ads_blocked_today']
-  CLIENTS = data['unique_clients']
-  f.close()
+    r = requests.get(api_url)
+    data = json.loads(r.text)
+    DNSQUERIES = data['dns_queries_today']
+    ADSBLOCKED = data['ads_blocked_today']
+    CLIENTS = data['unique_clients']
+    ratioblocked = data['ads_percentage_today']
 
-except:
-  queries = '?'
-  adsblocked = '?'
-  ratio = '?'
+except KeyError:
+    time.sleep(1)
 
-font = ImageFont.truetype(FredokaOne, 20)
-font2 = ImageFont.truetype(FredokaOne, 16)
+ratio = round(float(str(ratioblocked)),2)
 
-inky_display = InkyPHAT("red")
-inky_display.set_border(inky_display.WHITE)
+font1 = ImageFont.truetype(HankenGroteskBold, int(24 * scale_size))
+font2 = ImageFont.truetype(FredokaOne, int(30 * scale_size))
+font4 = ImageFont.truetype(HankenGroteskBold, int(12 * scale_size))
+font7 = ImageFont.truetype("Font.ttc", int(12 * scale_size))
 
-draw.text((20,10), "IP: " + str(IP), inky_display.BLACK, font2)
-draw.text((00,20), "Clients: " + str(CLIENTS), inky_display.BLACK, font2)
-draw.text((10,20), "DNS Queries: " + str(DNSQUERIES), inky_display.BLACK, font2)
-draw.text((00,65), "CPU: " + str(cpu), inky_display.BLACK, font2)
-draw.text((20,65), "RAM: " + str(memory), inky_display.BLACK, font2)
-draw.text((20,20), "Ads Blocked: " + str(adsblocked), inky_display.BLACK, font)
-draw.text((40,20), str("%.1f" % round(ratioblocked,2)) + "%", inky_display.BLACK, font)
+print("drawing data")
+draw.text((0,0), "IP: " + str(IP) + " (" + HOST + ")", fill = 0, font = font7)
+draw.text((0,92), "Clients: " + str(CLIENTS), fill = 0, font = font7)
+draw.text((70,93), "Queries: " + str(DNSQUERIES), fill = 0, font = font4)
+draw.text((epd.height-60,epd.width-24), "CPU: " + str(cpu), fill = 0, font = font4)
+draw.text((epd.height-60,epd.width-12), "RAM: " + str(ram) + "%", fill = 0, font = font4)
+drawry.text((120,18), str(ADSBLOCKED), fill = 0, font = font2)
+draw.text((100,50), str(ratio) + "%", fill = 0, font = font1)
 
+#print all images to e-ink
+epd.display(epd.getbuffer(HBlackimage), epd.getbuffer(HRYimage))
 
-
-inky_display.set_image(img)
-
-inky_display.show()
+epd2in13bc.epdconfig.module_exit()
+exit()
